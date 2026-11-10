@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Push new or updated status incidents to a Feishu (Lark) custom bot.
+"""Push new or updated status incidents to Feishu (Lark) via an app bot.
 
 The previous run's state is read back from the deployed GitHub Pages site
 (state.json), so no commits are needed to remember what was already sent.
 The first run, or a run where the old state can't be fetched, only records
 the current items without sending anything.
 
-Env:
-  FEISHU_WEBHOOK  custom bot webhook URL (required to send)
-  FEISHU_SECRET   signing secret, if the bot has signature verification on
+Env (all required to send):
+  FEISHU_APP_ID      app credentials of the bot
+  FEISHU_APP_SECRET
+  FEISHU_RECEIVE_ID  who gets the messages: an email, an open_id (ou_...)
+                     for a private chat, or a chat_id (oc_...) for a group
 
 Usage: python3 notify.py [--out public] [--base-url https://.../]
 """
 
 import argparse
-import base64
 import hashlib
-import hmac
 import html
 import json
 import os
@@ -43,6 +43,8 @@ SOURCES = [
 # rewriting old entries doesn't flood the group.
 MAX_AGE = timedelta(days=3)
 MAX_MESSAGES = 20
+
+FEISHU_API = "https://open.feishu.cn/open-apis"
 
 
 def load_feed(location, out_dir):
@@ -117,38 +119,57 @@ def build_card(item):
     when = item["published"].astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M") \
         if item["published"] else ""
     return {
-        "msg_type": "interactive",
-        "card": {
-            "header": {
-                "template": card_template(item["text"]),
-                "title": {"tag": "plain_text", "content": f"[{item['source']}] {item['title']}"},
-            },
-            "elements": [
-                {"tag": "div", "text": {"tag": "plain_text", "content": body or "(no details)"}},
-                {"tag": "note", "elements": [{"tag": "plain_text", "content": f"{when} (UTC+8)"}]},
-                {"tag": "action", "actions": [{
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "查看详情"},
-                    "type": "default",
-                    "url": item["link"],
-                }]},
-            ],
+        "header": {
+            "template": card_template(item["text"]),
+            "title": {"tag": "plain_text", "content": f"[{item['source']}] {item['title']}"},
         },
+        "elements": [
+            {"tag": "div", "text": {"tag": "plain_text", "content": body or "(no details)"}},
+            {"tag": "note", "elements": [{"tag": "plain_text", "content": f"{when} (UTC+8)"}]},
+            {"tag": "action", "actions": [{
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "查看详情"},
+                "type": "default",
+                "url": item["link"],
+            }]},
+        ],
     }
 
 
-def send(webhook, secret, payload):
-    if secret:
-        timestamp = str(int(time.time()))
-        key = f"{timestamp}\n{secret}".encode()
-        payload = dict(payload, timestamp=timestamp,
-                       sign=base64.b64encode(hmac.new(key, b"", hashlib.sha256).digest()).decode())
-    req = urllib.request.Request(webhook, data=json.dumps(payload).encode(),
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read())
-    if result.get("code", 0) != 0:
+def post_json(url, payload, token=None):
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        result = json.loads(exc.read() or b"{}") or {"http_status": exc.code}
+    if result.get("code") != 0:
         raise RuntimeError(f"Feishu error: {result}")
+    return result
+
+
+def tenant_token(app_id, app_secret):
+    result = post_json(f"{FEISHU_API}/auth/v3/tenant_access_token/internal",
+                       {"app_id": app_id, "app_secret": app_secret})
+    return result["tenant_access_token"]
+
+
+def receive_id_type(receive_id):
+    if "@" in receive_id:
+        return "email"
+    if receive_id.startswith("oc_"):
+        return "chat_id"
+    return "open_id"
+
+
+def send(token, receive_id, card):
+    post_json(f"{FEISHU_API}/im/v1/messages?receive_id_type={receive_id_type(receive_id)}",
+              {"receive_id": receive_id, "msg_type": "interactive",
+               "content": json.dumps(card, ensure_ascii=False)},
+              token)
 
 
 def main():
@@ -159,8 +180,10 @@ def main():
     args = parser.parse_args()
     base_url = args.base_url if not args.base_url or args.base_url.endswith("/") else args.base_url + "/"
 
-    webhook = os.environ.get("FEISHU_WEBHOOK")
-    secret = os.environ.get("FEISHU_SECRET")
+    app_id = os.environ.get("FEISHU_APP_ID")
+    app_secret = os.environ.get("FEISHU_APP_SECRET")
+    receive_id = os.environ.get("FEISHU_RECEIVE_ID")
+    enabled = bool(app_id and app_secret and receive_id) and not args.dry_run
     items = collect(args.out)
     previous = load_state(base_url)
     state = {item["key"]: item["hash"] for item in items}
@@ -175,13 +198,21 @@ def main():
             print(f"warning: {len(changed)} changes, sending the newest {MAX_MESSAGES}", file=sys.stderr)
             changed = changed[-MAX_MESSAGES:]
         print(f"{len(changed)} new or updated incidents")
+        token = None
+        if enabled and changed:
+            try:
+                token = tenant_token(app_id, app_secret)
+            except (urllib.error.URLError, RuntimeError) as exc:
+                print(f"warning: can't get tenant token: {exc}", file=sys.stderr)
 
         for item in changed:
-            if args.dry_run or not webhook:
+            if not enabled:
                 print(f"would send: [{item['source']}] {item['title']}")
                 continue
             try:
-                send(webhook, secret, build_card(item))
+                if token is None:
+                    raise RuntimeError("no tenant token")
+                send(token, receive_id, build_card(item))
                 print(f"sent: [{item['source']}] {item['title']}")
             except (urllib.error.URLError, RuntimeError) as exc:
                 # Keep the old hash so the next run retries this item.
@@ -190,7 +221,7 @@ def main():
                     state[item["key"]] = previous[item["key"]]
                 else:
                     del state[item["key"]]
-            time.sleep(0.5)  # custom bots allow ~5 requests/second
+            time.sleep(0.5)  # stay well under the per-bot message rate limit
 
     with open(os.path.join(args.out, "state.json"), "w") as f:
         json.dump(state, f, indent=0, sort_keys=True)

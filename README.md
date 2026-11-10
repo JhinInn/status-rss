@@ -25,9 +25,11 @@ python3 build_feeds.py --out public --base-url https://your.host/status/
 
 ## 飞书机器人通知
 
-`notify.py` 在每次构建时对比四个 feed 与上次部署的 `state.json`，把新增或有更新的事件以卡片形式推送到飞书群自定义机器人（已解决为绿色、监控中为蓝色、其余为红色）。
+`notify.py` 在每次构建时对比四个 feed 与上次部署的 `state.json`，把新增或有更新的事件以卡片形式通过飞书应用机器人发出（已解决为绿色、监控中为蓝色、其余为红色）。默认私聊推送给一个人，也可以发到机器人所在的群。
 
-1. 飞书群 → 设置 → 群机器人 → 添加「自定义机器人」，复制 Webhook 地址；如开启「签名校验」，同时复制密钥。
-2. 在仓库 Settings → Secrets and variables → Actions 添加 `FEISHU_WEBHOOK`（以及可选的 `FEISHU_SECRET`）。
+1. 飞书开放平台的应用需开启「机器人」能力，并开通 `im:message:send_as_bot` 权限；接收人需在应用的可用范围内。
+2. 在仓库 Settings → Secrets and variables → Actions 添加：
+   - `FEISHU_APP_ID`、`FEISHU_APP_SECRET`：应用凭证
+   - `FEISHU_RECEIVE_ID`：接收人邮箱，或 open_id（`ou_...`，私聊），或群 chat_id（`oc_...`）
 
 首次运行只记录现有事件、不推送；只推送 3 天内的事件，单次最多 20 条。发送失败的事件会在下次运行时重试。
