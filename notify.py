@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Push new or updated status incidents to Feishu (Lark) via an app bot.
 
-The previous run's state is read back from the deployed GitHub Pages site
-(state.json), so no commits are needed to remember what was already sent.
-The first run, or a run where the old state can't be fetched, only records
-the current items without sending anything.
+What was already sent is kept in a state file (carried between workflow
+runs by the Actions cache). The first run, or a run without a state file,
+only records the current items without sending anything.
 
 Env (all required to send):
   FEISHU_APP_ID      app credentials of the bot
@@ -12,7 +11,7 @@ Env (all required to send):
   FEISHU_RECEIVE_ID  who gets the messages: an email, an open_id (ou_...)
                      for a private chat, or a chat_id (oc_...) for a group
 
-Usage: python3 notify.py [--out public] [--base-url https://.../]
+Usage: python3 notify.py [--out public] [--state state/state.json]
 """
 
 import argparse
@@ -29,7 +28,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
-from build_feeds import USER_AGENT, fetch
+from build_feeds import fetch
 
 # (source name, feed location: URL or file name inside --out)
 SOURCES = [
@@ -91,14 +90,11 @@ def collect(out_dir):
     return items
 
 
-def load_state(base_url):
-    if not base_url:
-        return None
+def load_state(path):
     try:
-        req = urllib.request.Request(base_url + "state.json", headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read())
-    except Exception as exc:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError) as exc:
         print(f"no previous state ({exc}); seeding without notifying", file=sys.stderr)
         return None
 
@@ -175,17 +171,16 @@ def send(token, receive_id, card):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default="public")
-    parser.add_argument("--base-url", default=os.environ.get("BASE_URL", ""))
+    parser.add_argument("--state", default="state/state.json")
     parser.add_argument("--dry-run", action="store_true", help="print instead of sending")
     args = parser.parse_args()
-    base_url = args.base_url if not args.base_url or args.base_url.endswith("/") else args.base_url + "/"
 
     app_id = os.environ.get("FEISHU_APP_ID")
     app_secret = os.environ.get("FEISHU_APP_SECRET")
     receive_id = os.environ.get("FEISHU_RECEIVE_ID")
     enabled = bool(app_id and app_secret and receive_id) and not args.dry_run
     items = collect(args.out)
-    previous = load_state(base_url)
+    previous = load_state(args.state)
     state = {item["key"]: item["hash"] for item in items}
 
     if previous is not None:
@@ -223,7 +218,8 @@ def main():
                     del state[item["key"]]
             time.sleep(0.5)  # stay well under the per-bot message rate limit
 
-    with open(os.path.join(args.out, "state.json"), "w") as f:
+    os.makedirs(os.path.dirname(args.state) or ".", exist_ok=True)
+    with open(args.state, "w") as f:
         json.dump(state, f, indent=0, sort_keys=True)
 
 

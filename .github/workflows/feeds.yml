@@ -1,5 +1,7 @@
 name: Build status feeds
 
+# Dispatched every minute by the Cloudflare Worker in worker/; the schedule
+# below is only a fallback in case the Worker stops.
 on:
   schedule:
     - cron: "*/15 * * * *"
@@ -12,7 +14,7 @@ permissions:
 
 concurrency:
   group: pages
-  # Don't cancel mid-run: state.json must be deployed after notifications go out.
+  # Don't cancel mid-run: the state must be saved after notifications go out.
   cancel-in-progress: false
 
 jobs:
@@ -26,11 +28,23 @@ jobs:
       - uses: actions/configure-pages@v5
         id: pages
       - run: python3 build_feeds.py --out public --base-url "${{ steps.pages.outputs.base_url }}"
-      - run: python3 notify.py --out public --base-url "${{ steps.pages.outputs.base_url }}"
+      # Cache entries are immutable, so each run saves under a new key and
+      # restores the newest one by prefix.
+      - uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: notify-state-${{ github.run_id }}
+          restore-keys: notify-state-
+      - run: python3 notify.py --out public --state state/state.json
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_RECEIVE_ID: ${{ secrets.FEISHU_RECEIVE_ID }}
+      - uses: actions/cache/save@v4
+        if: always() && hashFiles('state/state.json') != ''
+        with:
+          path: state
+          key: notify-state-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public

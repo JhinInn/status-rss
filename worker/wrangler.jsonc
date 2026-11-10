@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "status-rss-trigger",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false,
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "observability": {
+    "enabled": true
+  }
+}
