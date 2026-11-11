@@ -1,6 +1,6 @@
 name: Build status feeds
 
-# Dispatched every minute by the Cloudflare Worker in worker/; the schedule
+# Dispatched every 5 minutes by the Cloudflare Worker in worker/; the schedule
 # below is only a fallback in case the Worker stops.
 on:
   schedule:

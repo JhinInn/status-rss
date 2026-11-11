@@ -1,5 +1,5 @@
-// Dispatches the feed workflow every minute. GitHub's own schedule runs at
-// most every 5 minutes and is often delayed much longer.
+// Dispatches the feed workflow every 5 minutes. GitHub's own schedule is
+// often delayed much longer than its nominal interval.
 const WORKFLOW_URL =
   "https://api.github.com/repos/JhinInn/status-rss/actions/workflows/feeds.yml/dispatches";
 

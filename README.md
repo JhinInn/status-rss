@@ -19,7 +19,7 @@ python3 build_feeds.py --out public --base-url https://your.host/status/
 
 生成的两个 feed 需要托管并定时刷新：
 
-- **GitHub Pages**：推送到 GitHub，在 Settings → Pages 里把 Source 设为 “GitHub Actions”。`worker/` 里的 Cloudflare Worker 每分钟触发一次 `.github/workflows/feeds.yml`；workflow 自带的每 15 分钟定时只是兜底。
+- **GitHub Pages**：推送到 GitHub，在 Settings → Pages 里把 Source 设为 “GitHub Actions”。`worker/` 里的 Cloudflare Worker 每 5 分钟触发一次 `.github/workflows/feeds.yml`；workflow 自带的每 15 分钟定时只是兜底。
 - **自建服务器**：用 cron 定时运行脚本，输出到 Web 目录，例如
   `*/10 * * * * cd /path/to/status-rss && python3 build_feeds.py --out /var/www/status --base-url https://your.host/status/`
 
@@ -34,9 +34,9 @@ python3 build_feeds.py --out public --base-url https://your.host/status/
 
 首次运行只记录现有事件、不推送；只推送 3 天内的事件，单次最多 20 条。发送失败的事件会在下次运行时重试。
 
-## 每分钟触发（Cloudflare Worker）
+## 每 5 分钟触发（Cloudflare Worker）
 
-GitHub 的定时任务最短 5 分钟且经常延迟，所以由 `worker/` 的 Cron Trigger 每分钟调用一次 workflow_dispatch。
+GitHub 的定时任务经常延迟很久，所以由 `worker/` 的 Cron Trigger 每 5 分钟调用一次 workflow_dispatch。
 
 1. 创建 fine-grained token：仅授权本仓库，权限只给 **Actions: Read and write**。
 2. 部署：
