@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy-retry.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
@@ -48,5 +48,13 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public
+      # deploy-pages occasionally can't see the artifact uploaded seconds
+      # earlier ("No artifacts named github-pages"), so retry once.
       - uses: actions/deploy-pages@v4
         id: deploy
+        continue-on-error: true
+      - if: steps.deploy.outcome == 'failure'
+        run: sleep 20
+      - uses: actions/deploy-pages@v4
+        id: deploy-retry
+        if: steps.deploy.outcome == 'failure'
