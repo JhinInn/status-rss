@@ -30,12 +30,17 @@ from email.utils import parsedate_to_datetime
 
 from build_feeds import fetch
 
-# (source name, feed location: URL or file name inside --out)
+# (source name, feed location: URL or file name inside --out, title filter).
+# Only incidents about models or the APIs serving them are sent; the OpenAI
+# feeds are already filtered by build_feeds.py.
 SOURCES = [
-    ("Claude", "https://status.claude.com/history.rss"),
-    ("Codex", "codex.xml"),
-    ("DeepSeek", "https://status.deepseek.com/history.rss"),
-    ("Kimi", "kimi.xml"),
+    ("Claude", "https://status.claude.com/history.rss",
+     re.compile(r"\b(fable|opus|sonnet|haiku|mythos|models?|api)\b", re.I)),
+    ("Codex", "codex.xml", None),
+    ("OpenAI", "openai.xml", None),
+    ("DeepSeek", "https://status.deepseek.com/history.rss",
+     re.compile(r"api|web|网页|对话|模型", re.I)),
+    ("Kimi", "kimi.xml", re.compile(r"\bk\d|api|model|模型|对话", re.I)),
 ]
 
 # Ignore items older than this even if their content changed, so a feed
@@ -64,7 +69,7 @@ def to_text(fragment):
 
 def collect(out_dir):
     items = []
-    for source, location in SOURCES:
+    for source, location, title_filter in SOURCES:
         try:
             entries = load_feed(location, out_dir)
         except Exception as exc:  # one broken source shouldn't block the others
@@ -73,6 +78,8 @@ def collect(out_dir):
         for entry in entries:
             description = entry.findtext("description") or ""
             title = (entry.findtext("title") or "").strip()
+            if title_filter and not title_filter.search(title):
+                continue
             guid = entry.findtext("guid") or entry.findtext("link")
             try:
                 published = parsedate_to_datetime(entry.findtext("pubDate"))

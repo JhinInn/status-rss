@@ -4,7 +4,8 @@
 Claude and DeepSeek publish usable RSS feeds directly, so they are only
 referenced in the OPML. Two feeds have to be generated:
 
-- codex.xml: OpenAI's feed covers every product; keep only Codex items.
+- codex.xml:  OpenAI's feed covers every product; keep only Codex model items.
+- openai.xml: the other OpenAI items about models (ChatGPT, API, images).
 - kimi.xml:  Moonshot disabled RSS on its Statuspage, so build one from
              the public Statuspage JSON API.
 
@@ -14,6 +15,7 @@ Usage: python3 build_feeds.py [--out public] [--base-url https://.../]
 import argparse
 import json
 import os
+import re
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -29,6 +31,7 @@ NATIVE_FEEDS = {
 }
 GENERATED_FEEDS = {
     "Codex Status": "codex.xml",
+    "OpenAI Model Status": "openai.xml",
     "Kimi Status": "kimi.xml",
 }
 
@@ -41,7 +44,20 @@ def fetch(url):
         return resp.read()
 
 
-def build_codex(out_path):
+CODEX = re.compile(r"codex", re.I)
+# Only incidents about models or the APIs serving them are kept: those that
+# affect one of these components, or, when none are listed, name a model in
+# the title. Logins, billing, ads, Work mode, Dots, agents and so on are not.
+MODEL_COMPONENTS = {
+    "Conversations", "Voice mode", "Image Generation", "Images",
+    "Chat Completions", "Responses", "Realtime", "Audio",
+    "Codex Web", "Codex API", "CLI", "VS Code extension", "Codex in ChatGPT Desktop",
+}
+MODEL_NAMES = re.compile(r"\b(gpt|models?|sol|luna|astra|sora|codex)\b", re.I)
+
+
+def build_openai(out_path, keep, title, description):
+    """Write the OpenAI items for which keep(title, description) is true."""
     ET.register_namespace("dc", "http://purl.org/dc/elements/1.1/")
     ET.register_namespace("content", "http://purl.org/rss/1.0/modules/content/")
     root = ET.fromstring(fetch(OPENAI_FEED))
@@ -49,15 +65,40 @@ def build_codex(out_path):
     items = channel.findall("item")
     kept = 0
     for item in items:
-        text = " ".join(item.findtext(tag) or "" for tag in ("title", "description"))
-        if "codex" in text.lower():
+        if keep(item.findtext("title") or "", item.findtext("description") or ""):
             kept += 1
         else:
             channel.remove(item)
-    channel.find("title").text = "OpenAI Codex status"
-    channel.find("description").text = "OpenAI status updates mentioning Codex"
+    channel.find("title").text = title
+    channel.find("description").text = description
     ET.ElementTree(root).write(out_path, encoding="utf-8", xml_declaration=True)
     return kept, len(items)
+
+
+def build_codex(out_path):
+    return build_openai(out_path,
+                        lambda title, desc: CODEX.search(title + " " + desc)
+                        and is_model_incident(title, desc),
+                        "OpenAI Codex status",
+                        "OpenAI status updates mentioning Codex")
+
+
+def is_model_incident(title, description):
+    # Affected components are listed as "<li>Name (Status)</li>".
+    components = {re.sub(r"\s*\(.*", "", name).strip()
+                  for name in re.findall(r"<li>(.*?)</li>", description)}
+    if components:
+        return bool(components & MODEL_COMPONENTS)
+    return bool(MODEL_NAMES.search(title))
+
+
+def build_openai_models(out_path):
+    # Codex items are left to codex.xml so they aren't notified twice.
+    return build_openai(out_path,
+                        lambda title, desc: not CODEX.search(title + " " + desc)
+                        and is_model_incident(title, desc),
+                        "OpenAI model status",
+                        "OpenAI status updates about ChatGPT, API and image models (Codex excluded)")
 
 
 def parse_time(value):
@@ -132,7 +173,9 @@ def main():
     base_url = args.base_url if not args.base_url or args.base_url.endswith("/") else args.base_url + "/"
 
     kept, total = build_codex(os.path.join(args.out, "codex.xml"))
-    print(f"codex.xml: {kept}/{total} OpenAI items mention Codex")
+    print(f"codex.xml: {kept}/{total} OpenAI items about Codex models")
+    kept, total = build_openai_models(os.path.join(args.out, "openai.xml"))
+    print(f"openai.xml: {kept}/{total} OpenAI items about models")
     print(f"kimi.xml: {build_kimi(os.path.join(args.out, 'kimi.xml'))} incidents")
     build_opml(os.path.join(args.out, "feeds.opml"), base_url)
     print("feeds.opml written")
