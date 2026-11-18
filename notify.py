@@ -31,8 +31,9 @@ from email.utils import parsedate_to_datetime
 from build_feeds import fetch
 
 # (source name, feed location: URL or file name inside --out, title filter).
-# Only incidents about models or the APIs serving them are sent; the OpenAI
-# feeds are already filtered by build_feeds.py.
+# Only incidents about models or the APIs serving them, and about app store
+# payments or sign-in, are sent; the generated OpenAI, Google and Apple feeds
+# are already filtered by build_feeds.py.
 SOURCES = [
     ("Claude", "https://status.claude.com/history.rss",
      re.compile(r"\b(fable|opus|sonnet|haiku|mythos|models?|api)\b", re.I)),
@@ -41,6 +42,8 @@ SOURCES = [
     ("DeepSeek", "https://status.deepseek.com/history.rss",
      re.compile(r"api|web|网页|对话|模型", re.I)),
     ("Kimi", "kimi.xml", re.compile(r"\bk\d|api|model|模型|对话", re.I)),
+    ("Google", "google.xml", None),
+    ("Apple", "apple.xml", None),
 ]
 
 # Ignore items older than this even if their content changed, so a feed
@@ -68,12 +71,14 @@ def to_text(fragment):
 
 
 def collect(out_dir):
-    items = []
+    """Return the items of every readable source, and the names of the others."""
+    items, failed = [], []
     for source, location, title_filter in SOURCES:
         try:
             entries = load_feed(location, out_dir)
         except Exception as exc:  # one broken source shouldn't block the others
             print(f"warning: {source}: {exc}", file=sys.stderr)
+            failed.append(source)
             continue
         for entry in entries:
             description = entry.findtext("description") or ""
@@ -94,7 +99,7 @@ def collect(out_dir):
                 "published": published,
                 "text": to_text(description),
             })
-    return items
+    return items, failed
 
 
 def load_state(path):
@@ -108,7 +113,7 @@ def load_state(path):
 
 def card_template(text):
     head = text[:200].lower()
-    if any(word in head for word in ("resolved", "已解决", "已恢复")):
+    if any(word in head for word in ("resolved", "completed", "已解决", "已恢复")):
         return "green"
     if any(word in head for word in ("monitoring", "监控")):
         return "blue"
@@ -186,11 +191,15 @@ def main():
     app_secret = os.environ.get("FEISHU_APP_SECRET")
     receive_id = os.environ.get("FEISHU_RECEIVE_ID")
     enabled = bool(app_id and app_secret and receive_id) and not args.dry_run
-    items = collect(args.out)
+    items, failed = collect(args.out)
     previous = load_state(args.state)
     state = {item["key"]: item["hash"] for item in items}
 
     if previous is not None:
+        # A source that couldn't be read keeps what was recorded for it, or
+        # all its recent incidents would be sent again once it is back.
+        state.update({key: value for key, value in previous.items()
+                      if key.split(":", 1)[0] in failed})
         cutoff = datetime.now(timezone.utc) - MAX_AGE
         changed = [item for item in items
                    if previous.get(item["key"]) != item["hash"]
